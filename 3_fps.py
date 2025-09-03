@@ -914,6 +914,8 @@ class HavaSavunmaArayuz(QWidget):
             ("MAX_OUTPUT_DEGREE (°)", "MAX_OUTPUT_DEGREE", float),
             ("MIN_OUTPUT_DEGREE_THRESHOLD (°)", "MIN_OUTPUT_DEGREE_THRESHOLD", float),
 
+            ("aiming_tolerance (px)", "aiming_tolerance", int),
+
             ("DEGREES_PER_PIXEL_YAW", "DEGREES_PER_PIXEL_YAW", float),
             ("DEGREES_PER_PIXEL_PITCH", "DEGREES_PER_PIXEL_PITCH", float),
 
