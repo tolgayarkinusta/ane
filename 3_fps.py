@@ -474,7 +474,7 @@ class HavaSavunmaArayuz(QWidget):
         self.movement_restricted_yaw_end = 0
 
         # AYARLANDI: Nişan alma toleransı (piksel)
-        self.aiming_tolerance = 10  # Daha hassas nişan alma için
+        self.aiming_tolerance = 10  # Daha hassas nişan alma için. Az değer daha hassas ama zorlu nişan.
 
         self.current_yaw_angle = 0.0
         self.current_pitch_angle = 0.0
