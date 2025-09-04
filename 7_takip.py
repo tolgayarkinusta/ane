@@ -572,7 +572,7 @@ class HavaSavunmaArayuz(QWidget):
         self.deriv_yaw_ema = 0.0
         self.deriv_pitch_ema = 0.0
 
-        self.MAX_FEEDFORWARD_FRACTION = self.MAX_OUTPUT_DEGREE / 4  # feed-forward, MAX_OUTPUT_DEGREE'nin %50'sini aşmasın
+        self.MAX_FEEDFORWARD_FRACTION = 0.5  # feed-forward, MAX_OUTPUT_DEGREE'nin %50'sini aşmasın
 
         # AYARLANDI: Minimum hareket eşiği (PID çıktısı bunun altındaysa, hareket yok)
         self.MIN_OUTPUT_DEGREE_THRESHOLD = 0.01  # 0.03'ten 0.01'e düşürüldü, daha ince hareketlere izin vermek için
@@ -2150,7 +2150,7 @@ class HavaSavunmaArayuz(QWidget):
                 x_pid, y_pid, w_pid, h_pid = [int(v) for v in current_target_bbox_for_pid]
                 target_center_x = x_pid + w_pid // 2
                 target_center_y = y_pid + h_pid // 2
-                self.process_tracking(target_center_x, target_center_y, display_frame, 0, current_frame_time)
+                self.process_tracking(target_center_x, target_center_y, display_frame, 0, current_frame_time,current_target_bbox_for_pid)
             else:
                 self.reset_pid_state()
                 self.is_aimed_at_target = False
@@ -2312,7 +2312,7 @@ class HavaSavunmaArayuz(QWidget):
             traceback.print_exc()
             self._update_status_label(f"Hata: Görüntüleme Hatası: {str(e)[:50]}...")
 
-    def process_tracking(self, target_x, target_y, frame, target_area_unused, current_frame_time):
+    def process_tracking(self, target_x, target_y, frame, target_area_unused, current_frame_time,current_target_bbox_for_pid):
         """
         Hedef merkez koordinatlarına göre PID kontrolü kullanarak taret hareketini ayarlar.
         PID çıktısı doğrudan motorlara iletilir.
@@ -2320,9 +2320,12 @@ class HavaSavunmaArayuz(QWidget):
         if not self.rpi_thread.is_connected or self.active_task == 'full_manual' or self.target_destroyed:
             return
 
+
         tx, ty, tw, th = current_target_bbox_for_pid
         t_cx = tx + tw / 2.0
         t_cy = ty + th / 2.0
+
+        frame_h, frame_w = frame.shape[:2]
 
         # görüntü merkezine göre hata:
         err_px_x = t_cx - (frame_w / 2.0)
