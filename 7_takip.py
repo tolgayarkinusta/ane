@@ -2332,8 +2332,8 @@ class HavaSavunmaArayuz(QWidget):
         error_pitch_pixel = t_cy - (frame_h / 2.0)
 
         # derecelere çevirip PID'e veriyorsun (senin mevcut kodundaki gibi):
-        error_yaw_degree = err_px_x * self.DEGREES_PER_PIXEL_YAW
-        error_pitch_degree = err_px_y * self.DEGREES_PER_PIXEL_PITCH
+        error_yaw_degree = error_yaw_pixel * self.DEGREES_PER_PIXEL_YAW
+        error_pitch_degree = error_pitch_pixel * self.DEGREES_PER_PIXEL_PITCH
 
         self.is_aimed_at_target = abs(error_yaw_pixel) <= self.aiming_tolerance and \
                                   abs(error_pitch_pixel) <= self.aiming_tolerance
