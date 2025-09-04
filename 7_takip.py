@@ -2328,8 +2328,8 @@ class HavaSavunmaArayuz(QWidget):
         frame_h, frame_w = frame.shape[:2]
 
         # görüntü merkezine göre hata:
-        err_px_x = t_cx - (frame_w / 2.0)
-        err_px_y = t_cy - (frame_h / 2.0)
+        error_yaw_pixel = t_cx - (frame_w / 2.0)
+        error_pitch_pixel = t_cy - (frame_h / 2.0)
 
         # derecelere çevirip PID'e veriyorsun (senin mevcut kodundaki gibi):
         error_yaw_degree = err_px_x * self.DEGREES_PER_PIXEL_YAW
