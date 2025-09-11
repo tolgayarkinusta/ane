@@ -1505,7 +1505,7 @@ class HavaSavunmaArayuz(QWidget):
         self.b_input.setReadOnly(True)
         self.a_input.setText(str(self.TASK3_DEGREE_A))
         self.b_input.setText(str(self.TASK3_DEGREE_B))
-   def setup_task3(self):
+    def setup_task3(self):
         self.cancel_task()
         self.active_task = 'task3_setup'
         self.task3_settings_group_box.setVisible(True)
@@ -1559,7 +1559,7 @@ class HavaSavunmaArayuz(QWidget):
             self._update_status_label(f"Durum: QR '{self.last_detected_qr}' tespit edildi → {self.pending_target_yaw:.1f}°'ye dönülüyor.")
         else:
             self._update_status_label("Durum: Son QR yok. QR bekleniyor ve tespit edilince açıya dönülecek.")
-   def start_task3_engagement(self):
+    def start_task3_engagement(self):
         self.cancel_task()
         self.active_task = 'task3'
         self.crosshair_movable = False
@@ -2033,7 +2033,7 @@ class HavaSavunmaArayuz(QWidget):
                         self._update_status_label(f"Durum: QR '{self.last_detected_qr}' → {self.pending_target_yaw:.1f}°'ye dönülüyor.")
                     else:
                         self._update_status_label("Uyarı: Geçerli bir QR tespit edilmedi. QR bekleniyor.")
-elif self.current_tracked_target_class is not None and not self.target_destroyed:
+                elif self.current_tracked_target_class is not None and not self.target_destroyed:
                     # print(f"HATA AYIKLAMA: Kilitli hedef '{self.current_tracked_target_class}' takip ediliyor.")
                     closest_locked_detection = None
                     min_locked_distance = float('inf')
@@ -2358,7 +2358,7 @@ elif self.current_tracked_target_class is not None and not self.target_destroyed
                 cv2.putText(display_frame, overlay_text2, (x2, y2), font, scale, (255,255,255), thickness, cv2.LINE_AA)
             except Exception:
                 pass
-self._display_frame(display_frame)
+            self._display_frame(display_frame)
 
             self.frame_counter += 1
             # print("HATA AYIKLAMA (update_frame): Kare güncelleme döngüsü tamamlandı.")
