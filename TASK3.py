@@ -2018,7 +2018,7 @@ class HavaSavunmaArayuz(QWidget):
                             x, y, w0, h0 = det['bbox']
                             dcx = int(x + w0 / 2); dcy = int(y + h0 / 2)
                             dist = ((dcx - cx)**2 + (dcy - cy)**2) ** 0.5
-                            if dist < 150 and dist < best_dist:
+                            if dist < 400 and dist < best_dist:
                                 best_det, best_dist = det, dist
                         if best_det is not None:
                             self.last_detected_shape = best_det['class_name']
