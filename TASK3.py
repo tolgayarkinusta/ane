@@ -4,7 +4,6 @@
 # Hedefler çok yavaşsa aim_lead_vel_thresh’i 30–40 px/s yapıp boşuna lead verme.
 # Zaten feed-forward var; lead aktifken
 # feedforward_*_gain küçük (0.0–0.2) tutulursa ikisi çakışmadan birbirini tamamlar (FF anlık hız katkısı, lead ise hatayı öne taşır)
-# GÖREV 3: QRın ne kadar yakınındaki şekillere bakıp kitlenecek burdan ayarla --> (ctrl+f):  if d <= 50 and d < min_d:
 import sys
 import cv2
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QSizePolicy, \
@@ -500,6 +499,23 @@ class HavaSavunmaArayuz(QWidget):
         self.current_yaw_angle = 0.0
         self.current_pitch_angle = 0.0
         self.qr_detector = cv2.QRCodeDetector()
+        # === TASK3 sabit açıları ve izleme durumları ===
+        self.TASK3_DEGREE_A = 30.0
+        self.TASK3_DEGREE_B = 30.0
+
+        # QR/şekil son tespitler ve QR merkezi
+        self.last_detected_qr = None
+        self.last_detected_shape = None
+        self.last_qr_center_px = None
+
+        # QR açısından hedefe dönme için bekleyen hedef yaw
+        self.pending_target_yaw = None
+
+        # Hareketsizlik izlemesi
+        self.idle_timeout_seconds = 10.0
+        self._last_angles_for_idle = (self.current_yaw_angle, self.current_pitch_angle)
+        self._last_angle_change_time = time.time()
+
 
         self.last_qr_check_time = 0
         self.qr_check_interval = 2
@@ -618,13 +634,6 @@ class HavaSavunmaArayuz(QWidget):
         self.last_status_message = ""
         self.last_status_time = 0
         self.status_message_cooldown_interval = 0.5  # Saniye
-        # --- Aşama 3 Ön İzleme Durumu (YENİ) ---
-        # Aşama 3 ayar ekranındayken (task3_setup) tespit edilen SON QR ve 100px yarıçap içindeki YOLO tespiti burada tutulur.
-        self.preview_qr_char = None              # 'A' veya 'B' (veya başka)
-        self.preview_qr_center = None            # (x, y) piksel koordinatı
-        self.preview_shape_det = None            # {'class_name': str, 'score': float, 'bbox': (x,y,w,h)}
-        self.preview_last_time = 0.0             # zaman damgası
-
 
         print("HATA AYIKLAMA: RPiCommunicator başlatılıyor.")
         self.rpi_thread = RPiCommunicator(self.rpi_ip, self.rpi_port)
@@ -1467,82 +1476,124 @@ class HavaSavunmaArayuz(QWidget):
         print("HATA AYIKLAMA: Aşama 2 başlatıldı, PID ve hedef bilgisi sıfırlandı.")
 
     # YENİ: Aşama 3 ayar panelini gösteren fonksiyon
+
     def setup_task3(self):
+        self.cancel_task()
+        self.active_task = 'task3_setup'
+        # Paneller
+        self.task3_settings_group_box.setVisible(True)
+        self.movement_limits_group_box.setVisible(False)
+        self.fire_control_group_box.setVisible(True)
+        self.direct_manual_control_group_box.setVisible(False)
+
+        self._update_status_label("Durum: Aşama 3 - QR ve şekil taraması aktif. Angajman için butona basın.")
+        self.target_info_label.setText("Hedef Bilgisi: QR/Şekil taranıyor...")
+
+        # Model
+        global yolo_model_task3
+        if yolo_model_task3 is None:
+            yolo_model_task3 = load_yolo_model(YOLO_MODEL_PATH_TASK3)
+        self.model_is_tensorrt = (yolo_model_task3 == "tensorrt")
+
+        # Tespit aktif (takip/ateş yok); tarama update_frame içinde yapılacak
+        self.is_target_active = True
+        self.waiting_for_new_engagement_command = False
+        self.is_ready_to_engage_from_qr = False
+
+        # A/B değerlerini UI'da göster (salt-okunur)
+        self.a_input.setReadOnly(True)
+        self.b_input.setReadOnly(True)
+        self.a_input.setText(str(self.TASK3_DEGREE_A))
+        self.b_input.setText(str(self.TASK3_DEGREE_B))
+   def setup_task3(self):
         self.cancel_task()
         self.active_task = 'task3_setup'
         self.task3_settings_group_box.setVisible(True)
         self.movement_limits_group_box.setVisible(False)  # YENİ: Sınır panelini gizle
         self.fire_control_group_box.setVisible(True)
         self.direct_manual_control_group_box.setVisible(False)
-        # ÖN İZLEME: YOLO+QR derhal başlar
-        self._update_status_label("Durum: Aşama 3 - Ön izleme aktif. Ekranın sağ üstünde QR/Şekil bilgilerini doğrulayın ve 'Angajmanı Al'a basın.")
-        self.target_info_label.setText("Hedef Bilgisi: Aşama 3 Ön İzleme (QR + Şekil).")
-        # Ön izleme değişkenlerini sıfırla
-        self.preview_qr_char = None
-        self.preview_qr_center = None
-        self.preview_shape_det = None
-        self.preview_last_time = 0.0
-        # Kamera işleme döngüsünü etkinleştir
-        self.is_target_active = True
-        # Model yükle (gerekirse) ve tip bayrağını ayarla
-        global yolo_model_task3
-        if yolo_model_task3 is None:
-            yolo_model_task3 = load_yolo_model(MODEL_PATH_TASK3)
-        self.model_is_tensorrt = (yolo_model_task3 == "tensorrt")
+        self._update_status_label("Durum: Aşama 3 - Angajman ayarları bekleniyor.")
+        self.target_info_label.setText("Hedef Bilgisi: Yok (Ayar Bekleniyor).")
+        self.is_target_active = False  # Henüz hedef takibi aktif değil
 
     # YENİ: "Angajmanı Al" butonuna basıldığında çalışan fonksiyon
+
     def start_task3_engagement(self):
         self.cancel_task()
         self.active_task = 'task3'
         self.crosshair_movable = False
+        self.crosshair_fixed_center = True
+        self.fire_control_group_box.setVisible(True)
+        self.direct_manual_control_group_box.setVisible(False)
+        self.movement_limits_group_box.setVisible(False)
+        self.is_ready_to_engage_from_qr = False
 
-        # Model yükle (gerekirse)
+        # Model
         global yolo_model_task3
         if yolo_model_task3 is None:
-            yolo_model_task3 = load_yolo_model(MODEL_PATH_TASK3)
+            yolo_model_task3 = load_yolo_model(YOLO_MODEL_PATH_TASK3)
         self.model_is_tensorrt = (yolo_model_task3 == "tensorrt")
 
-        # A/B açılarını al
+        # A/B açı haritası KODDAN
+        self.qr_degrees = {'A': self.TASK3_DEGREE_A, 'B': self.TASK3_DEGREE_B}
+        self.a_input.setText(str(self.TASK3_DEGREE_A))
+        self.b_input.setText(str(self.TASK3_DEGREE_B))
+        self.a_input.setReadOnly(True)
+        self.b_input.setReadOnly(True)
+
+        self._update_status_label("Durum: Aşama 3 - Angajman başlatıldı. QR'e göre açıya dönülecek.")
+        self.target_info_label.setText("Hedef Bilgisi: QR/Şekil kilitlenecek.")
+        self.is_target_active = True
+        self.waiting_for_new_engagement_command = True
+        self.reset_pid_state()
+
+        # Hareketsizlik izleme
+        self._last_angles_for_idle = (self.current_yaw_angle, self.current_pitch_angle)
+        self._last_angle_change_time = time.time()
+
+        # Son QR varsa hedef açı ayarla ve dön
+        self.pending_target_yaw = None
+        if self.last_detected_qr and self.last_detected_qr in self.qr_degrees:
+            self.pending_target_yaw = float(self.qr_degrees[self.last_detected_qr])
+            self.send_angle_command(self.pending_target_yaw, self.current_pitch_angle)
+            self._update_status_label(f"Durum: QR '{self.last_detected_qr}' tespit edildi → {self.pending_target_yaw:.1f}°'ye dönülüyor.")
+        else:
+            self._update_status_label("Durum: Son QR yok. QR bekleniyor ve tespit edilince açıya dönülecek.")
+   def start_task3_engagement(self):
+        self.cancel_task()
+        self.active_task = 'task3'
+        self.crosshair_movable = False
+        self.crosshair_fixed_center = True
+        self.fire_control_group_box.setVisible(True)
+        self.direct_manual_control_group_box.setVisible(False)
+        self.movement_limits_group_box.setVisible(False)  # YENİ: Sınır panelini gizle
+        self.is_ready_to_engage_from_qr = False
+
+        # --- DÜZELTME 4: Aşama 3 modelini doğru şekilde yükle ve ata ---
+        global yolo_model_task3
+        if yolo_model_task3 is None:
+            # Bu, global trt_... değişkenlerini Aşama 3 modeline göre güncelleyecektir.
+            yolo_model_task3 = load_yolo_model(YOLO_MODEL_PATH_TASK3)
+
+        # Tespit fonksiyonunun doğru çalışması için model türü bayrağını güncelle
+        self.model_is_tensorrt = (yolo_model_task3 == "tensorrt")
+
+        # Girilen dereceleri al ve kaydet
         try:
             a_degree = float(self.a_input.text())
             b_degree = float(self.b_input.text())
             self.qr_degrees = {'A': a_degree, 'B': b_degree}
+            self._update_status_label("Durum: Aşama 3 Ayarları kaydedildi. QR kodu bekleniyor...")
+            self.target_info_label.setText("Hedef Bilgisi: QR Kod.")
+            self.is_target_active = True  # Kare işleme döngüsünü başlat
+            self.waiting_for_new_engagement_command = True
+            self.reset_pid_state()
+            print(f"HATA AYIKLAMA: Aşama 3 angajman başlatıldı. A:{a_degree}, B:{b_degree} dereceleri kaydedildi.")
         except ValueError:
             self._update_status_label("Hata: Lütfen geçerli sayısal değerler girin.")
             self.cancel_task()
             return
 
-        # Ön izleme verileri zorunlu
-        if not self.preview_qr_char or not self.preview_shape_det:
-            self._update_status_label("Hata: Önce Aşama 3 ön izlemede bir QR ve ŞEKİL tespiti yapılmalı.")
-            self.active_task = 'task3_setup'
-            return
-
-        # Kamera işleme döngüsü devam etsin
-        self.is_target_active = True
-        self.reset_pid_state()
-
-        # Ön izlemedeki şekli kilitle ve QR'ye karşılık gelen açıya dön
-        self.current_qr_char = self.preview_qr_char
-        self.current_tracked_target_class = self.preview_shape_det['class_name'] if self.preview_shape_det else None
-
-        if self.current_qr_char in self.qr_degrees:
-            target_yaw_from_qr = self.qr_degrees[self.current_qr_char]
-            self.send_angle_command(target_yaw_from_qr, self.current_pitch_angle)
-            # Angajmana hazır: QR zaten onaylandı
-            self.is_ready_to_engage_from_qr = True
-            self.waiting_for_new_engagement_command = False
-            self._update_status_label(
-                f"Durum: Aşama 3 başlatıldı. QR='{self.current_qr_char}', Hedef='{self.current_tracked_target_class}'. Açıya dönülüyor: {target_yaw_from_qr}°")
-            self.target_info_label.setText(
-                f"Hedef: {self.current_tracked_target_class or '—'} (QR: {self.current_qr_char}).")
-        else:
-            # QR harfi A/B değilse kullanıcıyı uyar ve setup'a geri dön
-            self._update_status_label(f"Uyarı: QR '{self.current_qr_char}' A/B değil. Lütfen A veya B QR gösterin.")
-            self.active_task = 'task3_setup'
-            return
-
-        print(f"HATA AYIKLAMA: Aşama 3 angajman başlatıldı (ön izleme verisiyle). A:{a_degree}, B:{b_degree} dereceleri kaydedildi.")
     def set_full_manual_mode(self):
         self.cancel_task()
         self.active_task = 'full_manual'
@@ -1944,108 +1995,45 @@ class HavaSavunmaArayuz(QWidget):
 
             if self.is_target_active and current_yolo_model is not None:
                 detections = self.process_yolo_detection(display_frame, current_yolo_model, current_classes)
-                # print(f"HATA AYIKLAMA (update_frame): YOLO {len(detections)} tespit buldu.")
 
-                
-                # YENİ: Aşama 3 ÖN İZLEME (task3_setup)
-                if self.active_task == 'task3_setup':
-                    # QR ve YOLO tespitlerini yap, son bulunan QR ve 100px yarıçapındaki en yakın YOLO tespitini kaydet
+                # --- TASK3: QR & şekil taraması (setup ve task3) ---
+                if self.active_task in ['task3_setup', 'task3']:
+                    # QR oku
                     data, bbox_qr, _ = self.qr_detector.detectAndDecode(display_frame)
                     if data:
-                        # QR merkezini hesapla (x,y)
-                        try:
-                            qx = int(bbox_qr[0][0][0] + (bbox_qr[0][2][0] - bbox_qr[0][0][0]) / 2)
-                            qy = int(bbox_qr[0][0][1] + (bbox_qr[0][2][1] - bbox_qr[0][0][1]) / 2)
-                            self.preview_qr_char = data
-                            self.preview_qr_center = (qx, qy)
-                            self.preview_last_time = time.time()
-                            # QR çevresinde 100px yarıçapta en yakın YOLO tespiti
-                            closest = None
-                            min_d = 1e9
-                            for det in detections:
-                                cx = int(det['bbox'][0] + det['bbox'][2] / 2)
-                                cy = int(det['bbox'][1] + det['bbox'][3] / 2)
-                                d = ((cx - qx)**2 + (cy - qy)**2) ** 0.5
-                                if d <= 50 and d < min_d:
-                                    min_d = d
-                                    closest = (cx, cy, det)
-                            if closest is not None:
-                                cx, cy, det = closest
-                                self.preview_shape_det = {
-                                    'class_name': det.get('class_name'),
-                                    'score': float(det.get('score', 0.0)),
-                                    'bbox': det.get('bbox')
-                                }
-                            else:
-                                self.preview_shape_det = None
-                        except Exception as _e:
-                            # QR bbox beklenen formatta değilse sessizce geç
-                            pass
-
-                    # Sağ üst köşe bilgi kutusu
-                    info_lines = []
-                    info_lines.append("AŞAMA 3 ÖN İZLEME")
-                    if self.preview_qr_char:
-                        info_lines.append(f"QR: {self.preview_qr_char}")
-                        if self.preview_qr_center:
-                            info_lines.append(f"QR merkez: {self.preview_qr_center[0]}, {self.preview_qr_center[1]}")
-                    else:
-                        info_lines.append("QR: —")
-                    if self.preview_shape_det:
-                        cname = self.preview_shape_det.get('class_name')
-                        conf = self.preview_shape_det.get('score', 0.0)
-                        info_lines.append(f"Şekil: {cname} (conf={conf:.2f})")
-                    else:
-                        info_lines.append("Şekil: —")
-                    # Kutu boyutunu belirle
-                    overlay_w = 320
-                    overlay_h = 24 + 24 * (len(info_lines))
-                    x0 = w - overlay_w - 10
-                    y0 = 10
-                    cv2.rectangle(display_frame, (x0, y0), (x0 + overlay_w, y0 + overlay_h), (0, 0, 0), -1)
-                    # Başlık rengi farklı
-                    for idx, line in enumerate(info_lines):
-                        yline = y0 + 22 + idx * 24
-                        cv2.putText(display_frame, line, (x0 + 10, yline), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                                    (255, 255, 255), 2, cv2.LINE_AA)
-# GÜNCELLENDİ: Aşama 3 Mantığı
-                if self.active_task == 'task3' and self.waiting_for_new_engagement_command and not self.is_ready_to_engage_from_qr:
-                    # Aşama 3: QR kodunu oku ve açıya dön
-                    # self.process_tracking_to_home_position() # Önce başlangıç konumuna dön
-                    data, bbox_qr, _ = self.qr_detector.detectAndDecode(display_frame)
-                    if data and data in self.qr_degrees:
-                        # QR koduna en yakın hedefi bul
-                        closest_target_to_qr = None
-                        min_dist_to_qr = float('inf')
-                        qr_center_x = bbox_qr[0][0][0] + (bbox_qr[0][2][0] - bbox_qr[0][0][0]) / 2
-
-                        for det in detections:
-                            det_center_x = det['bbox'][0] + det['bbox'][2] / 2
-                            dist = abs(det_center_x - qr_center_x)
-                            if dist < min_dist_to_qr:
-                                min_dist_to_qr = dist
-                                closest_target_to_qr = det
-
-                        if closest_target_to_qr:
-                            self.current_qr_char = data
-                            self.current_tracked_target_class = closest_target_to_qr['class_name']
-                            target_yaw_from_qr = self.qr_degrees[self.current_qr_char]
-
-                            self.send_angle_command(target_yaw_from_qr, self.current_pitch_angle)
-                            self.is_ready_to_engage_from_qr = True
-                            self.waiting_for_new_engagement_command = False
-
-                            self._update_status_label(
-                                f"Durum: QR Kodu '{data}' okundu. Hedef '{self.current_tracked_target_class}' kilitlendi. Açıya dönülüyor: {target_yaw_from_qr}°")
-                            self.target_info_label.setText(
-                                f"Hedef: {self.current_tracked_target_class}. Açıya dönülüyor.")
+                        self.last_detected_qr = data
+                        if bbox_qr is not None and len(bbox_qr) > 0:
+                            pts = bbox_qr[0]
+                            cx = int((pts[0][0] + pts[1][0] + pts[2][0] + pts[3][0]) / 4)
+                            cy = int((pts[0][1] + pts[1][1] + pts[2][1] + pts[3][1]) / 4)
+                            self.last_qr_center_px = (cx, cy)
                         else:
-                            self._update_status_label(f"Uyarı: QR Kodu okundu ancak yanında hedef bulunamadı.")
+                            self.last_qr_center_px = None
 
-                    elif data and data not in self.qr_degrees:
-                        self._update_status_label(f"Uyarı: QR Kodu okundu ancak geçerli değil: '{data}'")
+                    # QR merkezine 150px yakın en yakın şekli bul
+                    if self.last_qr_center_px and detections:
+                        cx, cy = self.last_qr_center_px
+                        best_det, best_dist = None, 1e9
+                        for det in detections:
+                            x, y, w0, h0 = det['bbox']
+                            dcx = int(x + w0 / 2); dcy = int(y + h0 / 2)
+                            dist = ((dcx - cx)**2 + (dcy - cy)**2) ** 0.5
+                            if dist < 150 and dist < best_dist:
+                                best_det, best_dist = det, dist
+                        if best_det is not None:
+                            self.last_detected_shape = best_det['class_name']
+                # print(f"HATA AYIKLAMA (update_frame): YOLO {len(detections)} tespit buldu.")
 
-                elif self.current_tracked_target_class is not None and not self.target_destroyed:
+                # GÜNCELLENDİ: Aşama 3 Mantığı
+                if self.active_task == 'task3' and self.waiting_for_new_engagement_command and not self.is_ready_to_engage_from_qr:
+                    # Son tespit edilen QR'e göre açıya dön (hemen kilitleme yok)
+                    if self.last_detected_qr and self.last_detected_qr in self.qr_degrees:
+                        self.pending_target_yaw = float(self.qr_degrees[self.last_detected_qr])
+                        self.send_angle_command(self.pending_target_yaw, self.current_pitch_angle)
+                        self._update_status_label(f"Durum: QR '{self.last_detected_qr}' → {self.pending_target_yaw:.1f}°'ye dönülüyor.")
+                    else:
+                        self._update_status_label("Uyarı: Geçerli bir QR tespit edilmedi. QR bekleniyor.")
+elif self.current_tracked_target_class is not None and not self.target_destroyed:
                     # print(f"HATA AYIKLAMA: Kilitli hedef '{self.current_tracked_target_class}' takip ediliyor.")
                     closest_locked_detection = None
                     min_locked_distance = float('inf')
@@ -2331,7 +2319,46 @@ class HavaSavunmaArayuz(QWidget):
                 self.target_info_label.setText("Hedef Bilgisi: Yok.")
 
             # print("HATA AYIKLAMA (update_frame): Ekran üzerinde çerçeve gösteriliyor.")
-            self._display_frame(display_frame)
+            
+            # --- TASK3: Açıya ulaştı mı? → Şekli kilitle ve otonom takibe geç (PID/Ateş) ---
+            if self.active_task == 'task3':
+                if self.pending_target_yaw is not None:
+                    if abs(float(self.current_yaw_angle) - float(self.pending_target_yaw)) <= 1.0:
+                        self.is_ready_to_engage_from_qr = True
+                        self.waiting_for_new_engagement_command = False
+                        if self.last_detected_shape:
+                            self.current_tracked_target_class = self.last_detected_shape
+                            self.current_tracked_target_bbox = None
+                        self._update_status_label("Durum: Açıya ulaşıldı. Şekil yeniden ediniliyor ve otonom nişan başlıyor.")
+                        self.pending_target_yaw = None
+
+                # 10 sn hareketsizlik → (0,0) ve tarama moduna dön
+                prev_yaw, prev_pitch = getattr(self, "_last_angles_for_idle", (self.current_yaw_angle, self.current_pitch_angle))
+                if abs(self.current_yaw_angle - prev_yaw) > 0.1 or abs(self.current_pitch_angle - prev_pitch) > 0.1:
+                    self._last_angles_for_idle = (self.current_yaw_angle, self.current_pitch_angle)
+                    self._last_angle_change_time = time.time()
+                else:
+                    if (time.time() - getattr(self, "_last_angle_change_time", time.time())) >= self.idle_timeout_seconds:
+                        self.send_angle_command(0.0, 0.0)
+                        self._update_status_label("Durum: 10 sn hareketsizlik → (0,0)’a dönüldü. Yeniden 'Angajmanı Al' bekleniyor.")
+                        self.setup_task3()
+
+            # --- TASK3 overlay: sağ üst köşe ---
+            try:
+                overlay_text1 = f"QR: {self.last_detected_qr if self.last_detected_qr else '-'}"
+                overlay_text2 = f"Şekil: {self.last_detected_shape if self.last_detected_shape else '-'}"
+                h_ov, w_ov = display_frame.shape[:2]
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                scale = 0.7; thickness = 2
+                (tw1, th1), _ = cv2.getTextSize(overlay_text1, font, scale, thickness)
+                (tw2, th2), _ = cv2.getTextSize(overlay_text2, font, scale, thickness)
+                x1 = w_ov - tw1 - 12; y1 = 28
+                x2 = w_ov - tw2 - 12; y2 = 56
+                cv2.putText(display_frame, overlay_text1, (x1, y1), font, scale, (255,255,255), thickness, cv2.LINE_AA)
+                cv2.putText(display_frame, overlay_text2, (x2, y2), font, scale, (255,255,255), thickness, cv2.LINE_AA)
+            except Exception:
+                pass
+self._display_frame(display_frame)
 
             self.frame_counter += 1
             # print("HATA AYIKLAMA (update_frame): Kare güncelleme döngüsü tamamlandı.")
