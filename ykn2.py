@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QPushButton, QVBoxLay
     QSpacerItem, QGroupBox, QLineEdit, QMessageBox, QRadioButton, QDialog, QCheckBox
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen, QFont
 from PyQt5.QtCore import QTimer, Qt, QCoreApplication, QThread, pyqtSignal
+from pyzbar.pyzbar import decode
 
 import time
 import numpy as np
@@ -19,6 +20,7 @@ import json
 import os
 import traceback
 import queue  # İş parçacığı güvenli iletişim için
+
 
 # TensorRT içe aktarmaları
 try:
@@ -468,12 +470,13 @@ class HavaSavunmaArayuz(QWidget):
         self.target_yaw_from_qr = 0.0
         self.turn_start_time = 0.0
         self.task3_state = "IDLE"  # "IDLE", "CONFIRMING_TARGET", "TURNING_TO_SECTOR", "SEARCHING_IN_SECTOR", "ENGAGING_TARGET", "RETURNING_TO_HOME"
+        self.kill_confirmation_start_time = 0.0
+        self.KILL_CONFIRMATION_DURATION_S = 1.0  # İmha onayı için 2 saniye bekle
         self.confirmation_start_time = 0.0
         self.confirmation_target_class = None
         self.confirmation_qr_code = None
-        self.CONFIRMATION_DURATION_S = 2.0  # Teyit için 2 saniye bekle
+        self.CONFIRMATION_DURATION_S = 0.5  # Teyit için 2 saniye bekle
         self.tracking_lost_start_time = 0.0
-
         self.search_start_time = 0.0
         self.SEARCH_TIMEOUT_S = 5.0  # Hedef arama için 5 saniye zaman aşımı
 
@@ -1248,15 +1251,24 @@ class HavaSavunmaArayuz(QWidget):
         """RPiCommunicator'dan gelen genel yanıtları işler."""
         if response_data.get("status") == "ok":
             if response_data.get("action") == "fire":
-                self._update_status_label("Durum: Ateşleme Başarılı!")
-                print("Ateşleme Başarılı!")
-                if self.active_task in ['task1', 'task2', 'task3']:
+                self._update_status_label("Durum: Ateşleme Komutu RPi'ye Ulaştı!")
+                print("Ateşleme Komutu RPi tarafından onaylandı.")
+
+                # --- BAŞLANGIÇ: GÖREVE ÖZEL DAVRANIŞ ---
+                # Sadece Aşama 1 veya 2 aktif ise hedefi yok edilmiş say.
+                if self.active_task in ['task1', 'task2']:
                     self.target_destroyed = True
                     self.waiting_for_new_engagement_command = True
                     self._update_status_label("Durum: Hedef yok edildi. Yeni angajman bekleniyor...")
                     self.target_info_label.setText("Hedef Bilgisi: Yok Edildi.")
-                    self.reset_pid_state()  # PID durumunu sıfırla
-                    print("HATA AYIKLAMA: Ateşlemeden sonra PID ve hedef bilgisi sıfırlandı.")
+                    self.reset_pid_state()
+                    print("HATA AYIKLAMA: Aşama 1/2'de ateşlemeden sonra PID ve hedef bilgisi sıfırlandı.")
+
+                # Aşama 3 aktif ise, hiçbir şey yapma. Onay sürecini bekle.
+                elif self.active_task == 'task3':
+                    # Bu durumda bayrağı biz ayarlamayacağız.
+                    # İmha onayı durumu (CONFIRMING_KILL) bu kararı verecek.
+                    print("HATA AYIKLAMA: Aşama 3'te ateşleme onayı alındı. İmha onayı bekleniyor.")
             elif response_data.get("action") == "reset_angles":
                 self._update_status_label("Durum: Taret açıları Raspberry Pi'de (0,0) olarak sıfırlandı.")
                 self.update_info_panel("Taret açıları sıfırlandı: Yaw 0.0°, Pitch 0.0°")
@@ -1947,7 +1959,7 @@ class HavaSavunmaArayuz(QWidget):
                 current_classes = CLASSES
 
             if self.is_target_active and current_yolo_model is not None:
-                detections = self.process_yolo_detection(display_frame, current_yolo_model, current_classes)
+                detections = self.process_yolo_detection(frame, current_yolo_model, current_classes)  # <-- DOĞRU: Orijinal 'frame' gönderiliyor
                 # print(f"HATA AYIKLAMA (update_frame): YOLO {len(detections)} tespit buldu.")
 
                 # GÜNCELLENDİ: Aşama 3 Mantığı
@@ -1958,7 +1970,7 @@ class HavaSavunmaArayuz(QWidget):
                         # --- DURUM: GÖREV EMRİ BEKLENİYOR veya BAŞLANGIÇ ---
                         if self.task3_state == "IDLE":
                             self._update_status_label("Durum: Görev emri için QR kodu bekleniyor...")
-                            data, bbox_qr, _ = self.qr_detector.detectAndDecode(display_frame)
+                            data, bbox_qr, _ = self.qr_detector.detectAndDecode(frame)  # Temiz 'frame' kullanılıyor
                             if data and data in self.qr_degrees:
                                 closest_target_to_qr = min(detections, key=lambda d: abs(
                                     d['bbox'][0] + d['bbox'][2] / 2 - (
@@ -1977,7 +1989,7 @@ class HavaSavunmaArayuz(QWidget):
                             elapsed_time = time.time() - self.confirmation_start_time
                             self._update_status_label(
                                 f"Durum: Hedef teyit ediliyor... ({elapsed_time:.1f}s / {self.CONFIRMATION_DURATION_S}s)")
-                            data, bbox_qr, _ = self.qr_detector.detectAndDecode(display_frame)
+                            data, bbox_qr, _ = self.qr_detector.detectAndDecode(frame)  # Temiz 'frame' kullanılıyor
                             if data == self.confirmation_qr_code:
                                 closest_target_to_qr = min(detections, key=lambda d: abs(
                                     d['bbox'][0] + d['bbox'][2] / 2 - (
@@ -2024,12 +2036,24 @@ class HavaSavunmaArayuz(QWidget):
                             elif elapsed_search_time > self.SEARCH_TIMEOUT_S:
                                 print("HATA AYIKLAMA: Hedef arama zaman aşımına uğradı! Başa dönülüyor.")
                                 self.task3_state = "RETURNING_TO_HOME"
-                                self.send_angle_command(0, 0)  # DOĞRU KOMUTU GÖNDER
+                                self.send_angle_command(0, 0)
 
                         # --- DURUM: HEDEFE ANGAJMAN (PID TAKİBİ) ---
                         elif self.task3_state == "ENGAGING_TARGET":
                             self._update_status_label(
                                 f"Durum: '{self.current_tracked_target_class}' hedefine angaje olundu.")
+
+                            if self.is_aimed_at_target:
+                                current_time = time.time()
+                                if current_time - self.last_fire_time > self.fire_cooldown_interval:
+                                    if not self.is_in_no_fire_zone(self.current_yaw_angle):
+                                        print(
+                                            "HATA AYIKLAMA: Hedef nişan alındı, ATEŞ EDİLİYOR ve İMHA ONAYLAMA moduna geçiliyor.")
+                                        self.send_command_to_rpi({"action": "fire"})
+                                        self.last_fire_time = current_time
+                                        self.task3_state = "CONFIRMING_KILL"
+                                        self.kill_confirmation_start_time = time.time()
+
                             valid_targets = [d for d in detections if
                                              d['class_name'] == self.current_tracked_target_class]
                             closest_locked_detection = None
@@ -2049,32 +2073,56 @@ class HavaSavunmaArayuz(QWidget):
                             else:
                                 if self.tracking_lost_start_time == 0.0:
                                     self.tracking_lost_start_time = time.time()
-
                                 elapsed_lost_time = time.time() - self.tracking_lost_start_time
                                 self._update_status_label(f"Durum: Takip kaybedildi... ({elapsed_lost_time:.1f}s)")
-
                                 if elapsed_lost_time > 5.0:
                                     print("HATA AYIKLAMA: Hedef 5 saniyeden uzun süre kayıp! Başa dönülüyor.")
                                     self.task3_state = "RETURNING_TO_HOME"
-                                    self.send_angle_command(0, 0)  # DOĞRU KOMUTU GÖNDER
+                                    self.send_angle_command(0, 0)
 
-                        # --- DURUM: BAŞLANGIÇ POZİSYONUNA DÖNÜŞ (PASİF BEKLEME) ---
+                        # --- DURUM: İMHA ONAYLAMA ---
+                        elif self.task3_state == "CONFIRMING_KILL":
+                            elapsed_time = time.time() - self.kill_confirmation_start_time
+                            self._update_status_label(f"Durum: İmha onaylanıyor... ({elapsed_time:.1f}s)")
+                            valid_targets = [d for d in detections if
+                                             d['class_name'] == self.current_tracked_target_class]
+                            is_target_still_visible = False
+                            if valid_targets and self.current_tracked_target_bbox is not None:
+                                last_center_x = self.current_tracked_target_bbox[0] + self.current_tracked_target_bbox[
+                                    2] / 2
+                                last_center_y = self.current_tracked_target_bbox[1] + self.current_tracked_target_bbox[
+                                    3] / 2
+                                for det in valid_targets:
+                                    if np.hypot((det['bbox'][0] + det['bbox'][2] / 2) - last_center_x, (det['bbox'][1] +
+                                                                                                        det['bbox'][
+                                                                                                            3] / 2) - last_center_y) < self.MAX_REACQUISITION_DISTANCE_PIXELS:
+                                        is_target_still_visible = True
+                                        break
+
+                            if elapsed_time > self.KILL_CONFIRMATION_DURATION_S:
+                                if not is_target_still_visible:
+                                    print("HATA AYIKLAMA: İMHA ONAYLANDI. Hedef kayboldu.")
+                                    self.target_destroyed = True
+                                else:
+                                    print(
+                                        "HATA AYIKLAMA: İmha başarısız. Hedef hala görünüyor. Tekrar angaje olunuyor.")
+                                    self.task3_state = "ENGAGING_TARGET"
+                                    self.reset_pid_state()
+
+                        # --- DURUM: BAŞLANGIÇ POZİSYONUNA DÖNÜŞ ---
                         elif self.task3_state == "RETURNING_TO_HOME":
                             self._update_status_label("Durum: Başlangıç pozisyonuna dönülüyor...")
-                            # Bu durum artık AKTİF DEĞİL, sadece RPi'nin dönmesini bekler.
-                            # Savrulmayı önlemek için PID komutu gönderilmez.
-
                             if abs(self.current_yaw_angle - 0) < 1.5 and abs(self.current_pitch_angle - 0) < 1.5:
                                 print(
                                     "HATA AYIKLAMA: Başlangıç pozisyonuna ulaşıldı. Görev döngüsü yeniden başlatılıyor.")
                                 self.task3_state = "IDLE"
                                 self.reset_pid_state()
 
-                    # Hedef yok edildiğinde durumu güvenli bir şekilde değiştir
+                    # Bu blok, durum makinesinden sonra çalışır ve bayrak ayarlandığında geri dönüşü tetikler.
                     if self.target_destroyed:
-                        print("HATA AYIKLAMA: Hedef yok edildi! Başlangıç pozisyonuna dönme durumu ayarlandı.")
+                        print("HATA AYIKLAMA: target_destroyed bayrağı algılandı. Başlangıç pozisyonuna dönülüyor.")
                         self.task3_state = "RETURNING_TO_HOME"
-                        self.send_angle_command(0, 0)  # DOĞRU KOMUTU GÖNDER
+                        self.send_angle_command(0, 0)
                         self.target_destroyed = False
                         self.current_tracked_target_class = None
                         self.current_tracked_target_bbox = None  # Angajmanı durdur ve izlemeye dön
