@@ -42,8 +42,6 @@ except Exception as e:
     traceback.print_exc()
 
 # --- YOLOv11 Model Yapılandırması ---
-# DİKKAT: Bu yolu PC'deki best.engine veya best.onnx dosyanızın gerçek yoluyla güncelleyin!
-# Her iki formatı da desteklemek için uzantıyı kontrol edeceğiz.
 YOLO_MODEL_PATH = "C:/Users/enesd/PycharmProjects/PythonProject/best.engine"  # Veya .onnx
 # YENİ: Aşama 3 için yeni model yolu
 YOLO_MODEL_PATH_TASK3 = "C:/Users/enesd/PycharmProjects/PythonProject/best1.engine"
@@ -53,11 +51,11 @@ NMS_THRESHOLD = 0.4
 # GÜNCELLEDİ: data.yaml'a dayalı sınıflar
 CLASSES = ['blue_balloon', 'red_balloon']  # data.yaml'dan güncellenmiş sınıflar
 
-# YENİ: Aşama 3 için özel sınıflar
+# YENİ: Aşama 3 için sınıflar
 CLASSES_TASK3 = ['kir_Dai', 'kir_Kar', 'kir_Uc', 'mav_Dai', 'mav_Kar', 'mav_Uc', 'yes_Dai', 'yes_Kar', 'yes_Uc']
 
 # IMG_HEIGHT ve IMG_WIDTH'i varsayılan değerlerle global olarak başlat
-IMG_HEIGHT, IMG_WIDTH = 768, 768  # YOLOv11 için varsayılan
+IMG_HEIGHT, IMG_WIDTH = 1056, 1056  # YOLOv11 için varsayılan
 
 # TensorRT bağlamı ve motor değişkenleri
 trt_runtime = None
@@ -475,7 +473,7 @@ class HavaSavunmaArayuz(QWidget):
         self.confirmation_start_time = 0.0
         self.confirmation_target_class = None
         self.confirmation_qr_code = None
-        self.CONFIRMATION_DURATION_S = 0.5  # Teyit için 2 saniye bekle
+        self.CONFIRMATION_DURATION_S = 0.3  # Teyit için 2 saniye bekle
         self.tracking_lost_start_time = 0.0
         self.search_start_time = 0.0
         self.SEARCH_TIMEOUT_S = 5.0  # Hedef arama için 5 saniye zaman aşımı
@@ -568,7 +566,7 @@ class HavaSavunmaArayuz(QWidget):
 
         self.KP_PITCH = 0.7  # 0.04'ten 0.06'ya yükseltildi
         self.KI_PITCH = 0.005  # 0.0001'den 0.0002'ye yükseltildi
-        self.KD_PITCH = 0.02  # 0.08'den 0.12'ye yükseltildi
+        self.KD_PITCH = 0.02  # 0.08'den 0.12'ye yükseltildi3
 
         self.pid_update_time = time.time()
         self.integral_yaw = 0.0  # PID integral terimi başlatıldı
@@ -1443,6 +1441,31 @@ class HavaSavunmaArayuz(QWidget):
         self.consecutive_stable_frames = 0
         # print("HATA AYIKLAMA: PID durumu sıfırlandı.") # Bu mesaj çok sık yazdırıldığı için yorum satırı yapıldı.
 
+    def _reset_task3_mission_state(self):
+        """
+        Bir Aşama 3 görev döngüsü tamamlandığında (başarılı veya başarısız),
+        ilgili tüm durumları ve değişkenleri bir sonraki görev için temizler.
+        Angajmanın kendisini (is_engagement_active) durdurmaz.
+        """
+        print("HATA AYIKLAMA: Aşama 3 görev döngüsü sıfırlanıyor...")
+        self.task3_state = "IDLE"
+        self.current_tracked_target_class = None
+        self.current_tracked_target_bbox = None
+        self.target_yaw_from_qr = 0.0
+
+        # Teyit değişkenlerini sıfırla
+        self.confirmation_start_time = 0.0
+        self.confirmation_target_class = None
+        self.confirmation_qr_code = None
+
+        # Zamanlayıcıları sıfırla
+        self.tracking_lost_start_time = 0.0
+        self.search_start_time = 0.0
+        self.kill_confirmation_start_time = 0.0
+
+        # PID'yi de sıfırla
+        self.reset_pid_state()
+
     def task1(self):
         self.cancel_task()
         self.active_task = 'task1'
@@ -1738,6 +1761,8 @@ class HavaSavunmaArayuz(QWidget):
                 return []
 
             outputs = []
+            """start_time_model = time.time()"""
+
             if self.model_is_tensorrt and isinstance(model, str) and model == "tensorrt":
                 # TensorRT ile çıkarım yap
                 if trt_context is None:
@@ -1765,6 +1790,10 @@ class HavaSavunmaArayuz(QWidget):
             else:
                 # ONNX Runtime ile çıkarım yap
                 outputs = model.run([output_name], {input_name: input_image})
+
+            """end_time_model = time.time()
+            inference_ms = (end_time_model - start_time_model) * 1000
+            print(f"Sadece Model Çıkarım Süresi: {inference_ms:.2f} ms")"""
 
             img_height, img_width, _ = frame.shape
             outputs_np = outputs[0]  # _process_yolo_output için bir numpy dizisi olduğundan emin ol
@@ -1965,12 +1994,13 @@ class HavaSavunmaArayuz(QWidget):
                 # GÜNCELLENDİ: Aşama 3 Mantığı
                 if self.active_task == 'task3':
 
+                    # Sadece angajman aktifse görev döngüsünü çalıştır
                     if self.is_engagement_active:
 
                         # --- DURUM: GÖREV EMRİ BEKLENİYOR veya BAŞLANGIÇ ---
                         if self.task3_state == "IDLE":
                             self._update_status_label("Durum: Görev emri için QR kodu bekleniyor...")
-                            data, bbox_qr, _ = self.qr_detector.detectAndDecode(frame)  # Temiz 'frame' kullanılıyor
+                            data, bbox_qr, _ = self.qr_detector.detectAndDecode(frame)
                             if data and data in self.qr_degrees:
                                 closest_target_to_qr = min(detections, key=lambda d: abs(
                                     d['bbox'][0] + d['bbox'][2] / 2 - (
@@ -1989,7 +2019,7 @@ class HavaSavunmaArayuz(QWidget):
                             elapsed_time = time.time() - self.confirmation_start_time
                             self._update_status_label(
                                 f"Durum: Hedef teyit ediliyor... ({elapsed_time:.1f}s / {self.CONFIRMATION_DURATION_S}s)")
-                            data, bbox_qr, _ = self.qr_detector.detectAndDecode(frame)  # Temiz 'frame' kullanılıyor
+                            data, bbox_qr, _ = self.qr_detector.detectAndDecode(frame)
                             if data == self.confirmation_qr_code:
                                 closest_target_to_qr = min(detections, key=lambda d: abs(
                                     d['bbox'][0] + d['bbox'][2] / 2 - (
@@ -2042,7 +2072,6 @@ class HavaSavunmaArayuz(QWidget):
                         elif self.task3_state == "ENGAGING_TARGET":
                             self._update_status_label(
                                 f"Durum: '{self.current_tracked_target_class}' hedefine angaje olundu.")
-
                             if self.is_aimed_at_target:
                                 current_time = time.time()
                                 if current_time - self.last_fire_time > self.fire_cooldown_interval:
@@ -2101,11 +2130,14 @@ class HavaSavunmaArayuz(QWidget):
 
                             if elapsed_time > self.KILL_CONFIRMATION_DURATION_S:
                                 if not is_target_still_visible:
-                                    print("HATA AYIKLAMA: İMHA ONAYLANDI. Hedef kayboldu.")
-                                    self.target_destroyed = True
+                                    print("HATA AYIKLAMA: İMHA ONAYLANDI. Başa dönülüyor.")
+                                    # --- YENİ MANTIK ---
+                                    # Bayrağı ayarlamak yerine, doğrudan eve dönüşü başlat.
+                                    self.task3_state = "RETURNING_TO_HOME"
+                                    self.send_angle_command(0, 0)
+                                    # --- BİTİŞ ---
                                 else:
-                                    print(
-                                        "HATA AYIKLAMA: İmha başarısız. Hedef hala görünüyor. Tekrar angaje olunuyor.")
+                                    print("HATA AYIKLAMA: İmha başarısız. Tekrar angaje olunuyor.")
                                     self.task3_state = "ENGAGING_TARGET"
                                     self.reset_pid_state()
 
@@ -2113,19 +2145,19 @@ class HavaSavunmaArayuz(QWidget):
                         elif self.task3_state == "RETURNING_TO_HOME":
                             self._update_status_label("Durum: Başlangıç pozisyonuna dönülüyor...")
                             if abs(self.current_yaw_angle - 0) < 1.5 and abs(self.current_pitch_angle - 0) < 1.5:
-                                print(
-                                    "HATA AYIKLAMA: Başlangıç pozisyonuna ulaşıldı. Görev döngüsü yeniden başlatılıyor.")
-                                self.task3_state = "IDLE"
-                                self.reset_pid_state()
+                                # --- BAŞLANGIÇ: NİHAİ DÜZELTME ---
+                                # Artık tüm görev durumunu temizleyen yeni fonksiyonumuzu çağırıyoruz.
+                                self._reset_task3_mission_state()
 
-                    # Bu blok, durum makinesinden sonra çalışır ve bayrak ayarlandığında geri dönüşü tetikler.
-                    if self.target_destroyed:
+                                # Bu blok, durum makinesinden sonra ve angajman kontrolünün içinde çalışır.
+                    # İmha onaylandığında bu blok eve dönüşü tetikler.
+                    """if self.target_destroyed:
                         print("HATA AYIKLAMA: target_destroyed bayrağı algılandı. Başlangıç pozisyonuna dönülüyor.")
                         self.task3_state = "RETURNING_TO_HOME"
                         self.send_angle_command(0, 0)
                         self.target_destroyed = False
                         self.current_tracked_target_class = None
-                        self.current_tracked_target_bbox = None  # Angajmanı durdur ve izlemeye dön
+                        self.current_tracked_target_bbox = None  # Angajmanı durdur ve izlemeye dön"""
 
                 elif self.current_tracked_target_class is not None and not self.target_destroyed:
                     # print(f"HATA AYIKLAMA: Kilitli hedef '{self.current_tracked_target_class}' takip ediliyor.")
