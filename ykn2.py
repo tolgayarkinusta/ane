@@ -478,7 +478,6 @@ class HavaSavunmaArayuz(QWidget):
         self.search_start_time = 0.0
         self.SEARCH_TIMEOUT_S = 5.0  # Hedef arama için 5 saniye zaman aşımı
 
-
         # KCF ile ilgili değişkenler artık kullanılmıyor veya rolleri değişti
         self.kcf_bbox = None
         self.kcf_active = False  # KCF artık ana takipçi değil
@@ -491,6 +490,7 @@ class HavaSavunmaArayuz(QWidget):
         # Ateş kısıtlı bölge tanımları (şimdi varsayılan değerler, kullanıcı tarafından değiştirilebilir)
         self.no_fire_yaw_start = 0.0  # Varsayılan değer
         self.no_fire_yaw_end = 0.0  # Varsayılan değer
+        self.no_fire_zone_active = False  # YENİ EKLENDİ: Yasaklı bölgenin aktif olup olmadığını belirten bayrak
 
         # YENİ: Aşama 1/2 için hareket sınırları
         self.yaw_movement_limit = 15  # Varsayılan olarak limit yok
@@ -683,6 +683,17 @@ class HavaSavunmaArayuz(QWidget):
         right_layout.addSpacerItem(
             QSpacerItem(10, 10, QSizePolicy.Minimum, QSizePolicy.Fixed))
 
+        # --- DÜZELTME BAŞLANGICI: Kod Sıralaması Düzeltildi ---
+
+        # ADIM 1: Ana konteyner ve layout'u, içine eklenecek elemanlardan ÖNCE oluşturulur.
+        self.zone_settings_container_group = QGroupBox("Bölge Ayarları Paneli")
+        self.zone_settings_container_group.setStyleSheet(
+            "color: white; font-size: 16px; font-weight: bold; border: 2px solid #007bff; border-radius: 8px; padding: 5px;")
+        self.zone_settings_container_layout = QVBoxLayout()
+        self.zone_settings_container_group.setLayout(self.zone_settings_container_layout)
+
+        # ADIM 2: İçerik olacak grup kutuları oluşturulur ve DOĞRUDAN konteynerin layout'una eklenir.
+
         # --- YENİ: Hareket Sınırları Grup Kutusu (Aşama 1/2 için) ---
         self.movement_limits_group_box = QGroupBox("Hareket Sınırları (Aşama 1/2)")
         self.movement_limits_group_box.setStyleSheet(
@@ -719,8 +730,60 @@ class HavaSavunmaArayuz(QWidget):
         movement_limits_layout.addLayout(limit_buttons_layout)
 
         self.movement_limits_group_box.setLayout(movement_limits_layout)
-        right_layout.addWidget(self.movement_limits_group_box)
-        self.movement_limits_group_box.setVisible(False)  # Başlangıçta gizli
+        self.zone_settings_container_layout.addWidget(
+            self.movement_limits_group_box)  # DEĞİŞTİRİLDİ: Ana konteynere eklendi.
+
+        # --- Ateş Kontrolü ve Kısıtlı Bölge Ayarları Grup Kutusu ---
+        self.fire_control_group_box = QGroupBox("Ateş Kontrolü ve Kısıtlı Bölge Ayarları")
+        self.fire_control_group_box.setStyleSheet(
+            "color: white; font-size: 16px; font-weight: bold; border: 2px solid white; border-radius: 8px; padding: 5px;")
+        fire_control_layout = QVBoxLayout()
+
+        # Kısıtlı Alan Başlangıç ve Bitiş Girişleri
+        no_fire_start_layout = QHBoxLayout()
+        label_no_fire_start = QLabel("Ateşsiz Bölge Başlangıç Yaw (°):")
+        label_no_fire_start.setStyleSheet("color: white; font-size: 12px;")
+        no_fire_start_layout.addWidget(label_no_fire_start)
+        self.no_fire_start_input = QLineEdit(self)
+        self.no_fire_start_input.setPlaceholderText(f"örn: -15.0")
+        self.no_fire_start_input.setStyleSheet("color: black; background-color: white; font-size: 12px;")
+        self.no_fire_start_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        no_fire_start_layout.addWidget(self.no_fire_start_input)
+        fire_control_layout.addLayout(no_fire_start_layout)
+
+        no_fire_end_layout = QHBoxLayout()
+        label_no_fire_end = QLabel("Ateşsiz Bölge Bitiş Yaw (°):")
+        label_no_fire_end.setStyleSheet("color: white; font-size: 12px;")
+        no_fire_end_layout.addWidget(label_no_fire_end)
+        self.no_fire_end_input = QLineEdit(self)
+        self.no_fire_end_input.setPlaceholderText(f"örn: 15.0")
+        self.no_fire_end_input.setStyleSheet("color: black; background-color: white; font-size: 12px;")
+        self.no_fire_end_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        no_fire_end_layout.addWidget(self.no_fire_end_input)
+        fire_control_layout.addLayout(no_fire_end_layout)
+
+        # Kısıtlı Alanı Uygula ve Temizle Butonları Yan Yana
+        no_fire_buttons_layout = QHBoxLayout()
+        self.apply_no_fire_zone_button = QPushButton("Ateşsiz Bölge Uygula", self)
+        self.apply_button_style(self.apply_no_fire_zone_button, font_size=14, padding=6, bg_color="#007bff",
+                                hover_color="#0069d9", pressed_color="#0062cc")  # Mavi
+        no_fire_buttons_layout.addWidget(self.apply_no_fire_zone_button)
+
+        self.clear_no_fire_zone_button = QPushButton("Ateşsiz Bölgeyi Temizle", self)
+        self.apply_button_style(self.clear_no_fire_zone_button, font_size=14, padding=6, bg_color="#6c757d",
+                                hover_color="#5a6268", pressed_color="#545b62")  # Gri
+        no_fire_buttons_layout.addWidget(self.clear_no_fire_zone_button)
+        fire_control_layout.addLayout(no_fire_buttons_layout)
+
+        self.fire_control_group_box.setLayout(fire_control_layout)
+        self.zone_settings_container_layout.addWidget(
+            self.fire_control_group_box)  # DEĞİŞTİRİLDİ: Ana konteynere eklendi.
+
+        # ADIM 3: İçeriği doldurulan ana konteyner, ana düzene eklenir ve gizlenir.
+        right_layout.addWidget(self.zone_settings_container_group)
+        self.zone_settings_container_group.setVisible(False)
+
+        # --- DÜZELTME BİTİŞİ ---
 
         # --- Aşama 3 Ayarları Grup Kutusu (YENİ) ---
         self.task3_settings_group_box = QGroupBox("Aşama 3 Ayarları")
@@ -806,60 +869,26 @@ class HavaSavunmaArayuz(QWidget):
                                 hover_color="#138496", pressed_color="#117a8b")  # Mavi
         control_layout.addWidget(self.reset_angles_button)
 
-        # --- AYARLAR Butonu ---
+        # YENİ EKLENDİ: Bölge Ayarları butonu
+        settings_buttons_layout = QHBoxLayout()  # Yatay bir düzen oluştur
+
+        # Bölge Ayarları butonu
+        self.zone_settings_button = QPushButton("Bölge Ayarları", self)
+        self.apply_button_style(self.zone_settings_button, font_size=16, padding=8, bg_color="#6c757d")
+        settings_buttons_layout.addWidget(self.zone_settings_button)  # Yatay düzene ekle
+
+        # Ayarlar butonu
         self.settings_button = QPushButton("Ayarlar", self)
-        self.apply_button_style(self.settings_button, font_size=16, padding=8, bg_color="#6f42c1")  # mor ton
-        control_layout.addWidget(self.settings_button)
+        self.apply_button_style(self.settings_button, font_size=16, padding=8, bg_color="#6f42c1")
+        settings_buttons_layout.addWidget(self.settings_button)  # Yatay düzene ekle
+
+        control_layout.addLayout(settings_buttons_layout)  # Yatay düzenin tamamını ana dikey düzene ekle
+        # --- Bitiş ---
+
         self.settings_button.clicked.connect(self.open_settings_dialog)
 
         control_group_box.setLayout(control_layout)
         right_layout.addWidget(control_group_box)
-
-        # --- Ateş Kontrolü ve Kısıtlı Bölge Ayarları Grup Kutusu ---
-        self.fire_control_group_box = QGroupBox("Ateş Kontrolü ve Kısıtlı Bölge Ayarları")
-        self.fire_control_group_box.setStyleSheet(
-            "color: white; font-size: 16px; font-weight: bold; border: 2px solid white; border-radius: 8px; padding: 5px;")
-        fire_control_layout = QVBoxLayout()
-
-        # Kısıtlı Alan Başlangıç ve Bitiş Girişleri
-        no_fire_start_layout = QHBoxLayout()
-        label_no_fire_start = QLabel("Ateşsiz Bölge Başlangıç Yaw (°):")
-        label_no_fire_start.setStyleSheet("color: white; font-size: 12px;")
-        no_fire_start_layout.addWidget(label_no_fire_start)
-        self.no_fire_start_input = QLineEdit(self)
-        self.no_fire_start_input.setPlaceholderText(f"örn: -15.0")
-        self.no_fire_start_input.setStyleSheet("color: black; background-color: white; font-size: 12px;")
-        self.no_fire_start_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        no_fire_start_layout.addWidget(self.no_fire_start_input)
-        fire_control_layout.addLayout(no_fire_start_layout)
-
-        no_fire_end_layout = QHBoxLayout()
-        label_no_fire_end = QLabel("Ateşsiz Bölge Bitiş Yaw (°):")
-        label_no_fire_end.setStyleSheet("color: white; font-size: 12px;")
-        no_fire_end_layout.addWidget(label_no_fire_end)
-        self.no_fire_end_input = QLineEdit(self)
-        self.no_fire_end_input.setPlaceholderText(f"örn: 15.0")
-        self.no_fire_end_input.setStyleSheet("color: black; background-color: white; font-size: 12px;")
-        self.no_fire_end_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        no_fire_end_layout.addWidget(self.no_fire_end_input)
-        fire_control_layout.addLayout(no_fire_end_layout)
-
-        # Kısıtlı Alanı Uygula ve Temizle Butonları Yan Yana
-        no_fire_buttons_layout = QHBoxLayout()
-        self.apply_no_fire_zone_button = QPushButton("Ateşsiz Bölge Uygula", self)
-        self.apply_button_style(self.apply_no_fire_zone_button, font_size=14, padding=6, bg_color="#007bff",
-                                hover_color="#0069d9", pressed_color="#0062cc")  # Mavi
-        no_fire_buttons_layout.addWidget(self.apply_no_fire_zone_button)
-
-        self.clear_no_fire_zone_button = QPushButton("Ateşsiz Bölgeyi Temizle", self)
-        self.apply_button_style(self.clear_no_fire_zone_button, font_size=14, padding=6, bg_color="#6c757d",
-                                hover_color="#5a6268", pressed_color="#545b62")  # Gri
-        no_fire_buttons_layout.addWidget(self.clear_no_fire_zone_button)
-        fire_control_layout.addLayout(no_fire_buttons_layout)
-
-        self.fire_control_group_box.setLayout(fire_control_layout)
-        right_layout.addWidget(self.fire_control_group_box)
-        self.fire_control_group_box.setVisible(True)
 
         # --- MANUEL YÖN KONTROLÜ Grup Kutusu ---
         self.direct_manual_control_group_box = QGroupBox("Doğrudan Manuel Kontrol")
@@ -945,6 +974,10 @@ class HavaSavunmaArayuz(QWidget):
         self.reset_angles_button.clicked.connect(self.reset_rpi_angles)
         self.apply_no_fire_zone_button.clicked.connect(self.apply_no_fire_zone_settings)
         self.clear_no_fire_zone_button.clicked.connect(self.clear_no_fire_zone_settings)
+
+        # YENİ EKLENDİ: Bölge Ayarları butonu sinyali
+        self.zone_settings_button.clicked.connect(self.toggle_zone_settings)
+
         # YENİ: Aşama 3 başlangıç butonu sinyali
         self.task3_start_button.clicked.connect(self.start_task3_engagement)
         # YENİ: Angajmanı Durdur butonu sinyali
@@ -1100,6 +1133,11 @@ class HavaSavunmaArayuz(QWidget):
             }}
         """)
         button.clicked.connect(button.clearFocus)
+
+    def toggle_zone_settings(self):
+        """Bölge ayarları konteynerinin görünürlüğünü açar veya kapatır."""
+        is_visible = self.zone_settings_container_group.isVisible()
+        self.zone_settings_container_group.setVisible(not is_visible)
 
     def open_settings_dialog(self):
         """Ayarlar panelini açar; her parametre için mevcut değeri gösterir ve 'Değer Ata' ile canlı günceller."""
@@ -1405,8 +1443,6 @@ class HavaSavunmaArayuz(QWidget):
         self.qr_degrees = {}
         self.current_qr_char = None
         self.task3_settings_group_box.setVisible(False)
-        self.movement_limits_group_box.setVisible(False)  # YENİ: Sınır panelini gizle
-
         self._update_status_label("Durum: Görev durduruldu.")
         self.target_info_label.setText("Hedef Bilgisi: Yok")
         self._stop_all_manual_movement()
@@ -1414,7 +1450,6 @@ class HavaSavunmaArayuz(QWidget):
         self.movement_restricted_yaw_end = 0
         self.active_engagement_target_color = None
         self.active_engagement_target_shape = None
-        self.fire_control_group_box.setVisible(True)
         self.direct_manual_control_group_box.setVisible(False)
         self.is_target_active = False
         self.is_aimed_at_target = False
@@ -1472,7 +1507,6 @@ class HavaSavunmaArayuz(QWidget):
         self.crosshair_movable = False
         self.crosshair_fixed_center = True
         self.task3_settings_group_box.setVisible(False)
-        self.movement_limits_group_box.setVisible(True)  # YENİ: Sınır panelini göster
         self._update_status_label("Durum: Aşama 1 başlatıldı (Tüm Balonları Takip Et, Manuel Ateş).")
         self.target_info_label.setText("Hedef Bilgisi: Tüm Balonlar.")
         self.kcf_active = False
@@ -1485,7 +1519,6 @@ class HavaSavunmaArayuz(QWidget):
         self.missing_frames = 0  # Sıfırla
         self.movement_restricted_yaw_start = 0
         self.movement_restricted_yaw_end = 0
-        self.fire_control_group_box.setVisible(True)
         self.direct_manual_control_group_box.setVisible(False)
         self.is_target_active = True
         self.is_aimed_at_target = False
@@ -1499,7 +1532,6 @@ class HavaSavunmaArayuz(QWidget):
         self.crosshair_movable = False
         self.crosshair_fixed_center = True
         self.task3_settings_group_box.setVisible(False)
-        self.movement_limits_group_box.setVisible(True)  # YENİ: Sınır panelini göster
         self._update_status_label("Durum: Aşama 2 başlatıldı (Kırmızı Balonu Takip Et, Otomatik Ateş).")
         self.target_info_label.setText("Hedef Bilgisi: Kırmızı Balon.")
         self.kcf_active = False
@@ -1512,7 +1544,6 @@ class HavaSavunmaArayuz(QWidget):
         self.missing_frames = 0  # Sıfırla
         self.movement_restricted_yaw_start = 0
         self.movement_restricted_yaw_end = 0
-        self.fire_control_group_box.setVisible(True)
         self.direct_manual_control_group_box.setVisible(False)
         self.is_target_active = True
         self.is_aimed_at_target = False
@@ -1586,12 +1617,10 @@ class HavaSavunmaArayuz(QWidget):
         self.cancel_task()
         self.active_task = 'full_manual'
         self.task3_settings_group_box.setVisible(False)
-        self.movement_limits_group_box.setVisible(False)  # YENİ: Sınır panelini gizle
         self._update_status_label("Durum: Tam Manuel Kontrol Modu Aktif.")
         self.target_info_label.setText("Hedef Bilgisi: Yok (Manuel).")
         self.crosshair_movable = True
         self.crosshair_fixed_center = False
-        self.fire_control_group_box.setVisible(True)
         self.direct_manual_control_group_box.setVisible(True)
         try:
             self._start_manual_movement_timer()
@@ -1826,6 +1855,7 @@ class HavaSavunmaArayuz(QWidget):
 
             self.no_fire_yaw_start = start_yaw
             self.no_fire_yaw_end = end_yaw
+            self.no_fire_zone_active = True  # YENİ EKLENDİ: Bölge ayarlandığında bayrağı True yap
             self._update_status_label(
                 f"Durum: Ateşsiz Bölge Güncellendi: Yaw [{start_yaw:.1f}°, {end_yaw:.1f}°]")
             print(f"HATA AYIKLAMA: Ateşsiz Bölge Güncellendi: Yaw [{start_yaw:.1f}°, {end_yaw:.1f}°]")
@@ -1838,6 +1868,7 @@ class HavaSavunmaArayuz(QWidget):
         """Ateşsiz bölge ayarlarını temizler."""
         self.no_fire_yaw_start = 0.0
         self.no_fire_yaw_end = 0.0
+        self.no_fire_zone_active = False  # YENİ EKLENDİ: Bölge temizlendiğinde bayrağı False yap
         self.no_fire_start_input.setText("0.0")
         self.no_fire_end_input.setText("0.0")
         self._update_status_label("Durum: Ateşsiz Bölge Temizlendi.")
@@ -2447,6 +2478,9 @@ class HavaSavunmaArayuz(QWidget):
         Mevcut yaw açısının ateşsiz bölge içinde olup olmadığını kontrol eder, 0/360 derece etrafında dönmeyi yönetir.
         Mevcut yaw açısı ve bölge girişlerinin derece cinsinden olduğunu varsayar.
         """
+        # Eğer yasaklı bölge aktif değilse, hiçbir kontrol yapma ve "yasak yok" de.
+        if not self.no_fire_zone_active:
+            return False
         zone_start = self.no_fire_yaw_start
         zone_end = self.no_fire_yaw_end
 
